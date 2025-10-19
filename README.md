@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fortnightly Pay Calculator</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 900px;
+      margin: 40px auto;
+      padding: 20px;
+      background: #f9f9f9;
+      border-radius: 12px;
+      border: 1px solid #ccc;
+    }
+    h2 {
+      text-align: center;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 15px;
+    }
+    th, td {
+      border: 1px solid #ddd;
+      padding: 8px;
+      text-align: center;
+    }
+    th {
+      background: #f0f0f0;
+    }
+    input[type="time"], input[type="number"] {
+      width: 90px;
+      padding: 4px;
+      text-align: center;
+    }
+    input[type="file"] {
+      width: 110px;
+    }
+    img {
+      width: 80px;
+      height: 80px;
+      border-radius: 8px;
+      margin-top: 4px;
+      cursor: pointer;
+    }
+    button {
+      margin: 10px 6px;
+      padding: 10px 16px;
+      cursor: pointer;
+      font-size: 15px;
+      border-radius: 8px;
+    }
+    .result {
+      margin-top: 25px;
+      font-weight: bold;
+      text-align: center;
+      font-size: 18px;
+    }
+    .profile {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      margin-bottom: 15px;
+      flex-direction: column;
+    }
+    .profile img {
+      width: 100px;
+      height: 100px;
+      border-radius: 50%;
+      border: 3px solid #ccc;
+      object-fit: cover;
+    }
+    #zoomModal {
+      display: none;
+      position: fixed;
+      z-index: 100;
+      padding-top: 60px;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0,0,0,0.9);
+    }
+    #zoomModal img {
+      margin: auto;
+      display: block;
+      max-width: 90%;
+      max-height: 80%;
+    }
+  </style>
+</head>
+<body>
+  <div class="profile">
+    <label for="profilePic">Upload Profile Photo:</label>
+    <input type="file" accept="image/*" capture="user" id="profilePic">
+    <img id="profileImg" alt="Profile Photo" style="display:none;">
+  </div>
+
+  <h2>Fortnightly Work Hours and Income Calculator</h2>
+
+  <p>Enter start, finish, and break times for each day. The system will calculate pay automatically using Australian rates and photo metadata when available.</p>
+
+  <table id="hoursTable">
+    <thead>
+      <tr>
+        <th>Day</th>
+        <th>Start Time</th>
+        <th>Finish Time</th>
+        <th>Break (hrs)</th>
+        <th>Hours Worked</th>
+        <th>Screenshot</th>
+      </tr>
+    </thead>
+    <tbody id="daysContainer"></tbody>
+  </table>
+
+  <div style="text-align:center;">
+    <button onclick="calculate()">Calculate Pay</button>
+    <button onclick="exportExcel()">Export to Excel</button>
+    <button onclick="resetData()">Reset</button>
+  </div>
+
+  <div class="result" id="result"></div>
+
+  <div id="zoomModal" onclick="this.style.display='none'">
+    <img id="zoomImg">
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/exif-js"></script>
+  <script>
+    const days = [
+      'Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday',
+      'Monday (Week 2)','Tuesday (Week 2)','Wednesday (Week 2)','Thursday (Week 2)',
+      'Friday (Week 2)','Saturday (Week 2)','Sunday (Week 2)'
+    ];
+
+    const weekdayRate = 34.4;
+    const weekdayLateRate = 38.4;
+    const saturdayRate = 43.3;
+    const sundayRate = 55.7;
+
+    const container = document.getElementById('daysContainer');
+    days.forEach(day => {
+      const row = document.createElement('tr');
+      row.innerHTML = `
+        <td>${day}</td>
+        <td><input type="time" id="${day}-start"></td>
+        <td><input type="time" id="${day}-end"></td>
+        <td><input type="number" id="${day}-break" min="0" step="0.25" value="0"></td>
+        <td id="${day}-hours">0</td>
+        <td>
+          <input type="file" accept="image/*" capture="environment" onchange="previewImage(event, '${day}')">
+          <img id="${day}-img" style="display:none;">
+        </td>`;
+      container.appendChild(row);
+    });
+
+    document.getElementById('profilePic').addEventListener('change', e => {
+      const img = document.getElementById('profileImg');
+      const file = e.target.files[0];
+      if (file) {
+        img.src = URL.createObjectURL(file);
+        img.style.display = 'block';
+      }
+    });
+
+    function previewImage(event, day) {
+      const img = document.getElementById(`${day}-img`);
+      const file = event.target.files[0];
+      if (file) {
+        img.src = URL.createObjectURL(file);
+        img.style.display = 'block';
+        img.onclick = () => zoomImage(img.src);
+        EXIF.getData(file, function() {
+          const dateTaken = EXIF.getTag(this, 'DateTimeOriginal');
+          if (dateTaken) {
+            const parts = dateTaken.split(' ');
+            const time = parts[1].split(':').slice(0,2).join(':');
+            document.getElementById(`${day}-end`).value = time;
+          }
+        });
+      }
+    }
+
+    function zoomImage(src) {
+      document.getElementById('zoomImg').src = src;
+      document.getElementById('zoomModal').style.display = 'block';
+    }
+
+    function calculate() {
+      let totalHours = 0;
+      let totalPay = 0;
+
+      days.forEach(day => {
+        const start = document.getElementById(`${day}-start`).value;
+        const end = document.getElementById(`${day}-end`).value;
+        const breakTime = parseFloat(document.getElementById(`${day}-break`).value) || 0;
+        if (start && end) {
+          let startTime = new Date(`1970-01-01T${start}:00`);
+          let endTime = new Date(`1970-01-01T${end}:00`);
+          if (endTime <= startTime) endTime.setDate(endTime.getDate() + 1);
+          let hoursWorked = (endTime - startTime) / (1000 * 60 * 60) - breakTime;
+          document.getElementById(`${day}-hours`).innerText = hoursWorked.toFixed(2);
+          totalHours += hoursWorked;
+          let rate = 0;
+          if (day.includes('Saturday')) rate = saturdayRate;
+          else if (day.includes('Sunday')) rate = sundayRate;
+          else rate = (endTime.getHours() >= 0 && endTime.getHours() < 5) ? weekdayLateRate : weekdayRate;
+          totalPay += hoursWorked * rate;
+        }
+      });
+
+      document.getElementById('result').innerHTML =
+        `Total Hours (Fortnight): ${totalHours.toFixed(2)} hrs <br>
+         Total Pay (Fortnight): AUD $${totalPay.toFixed(2)}`;
+    }
+
+    function exportExcel() {
+      const rows = [['Day','Start Time','Finish Time','Break (hrs)','Hours Worked','Rate']];
+      days.forEach(day => {
+        const start = document.getElementById(`${day}-start`).value;
+        const end = document.getElementById(`${day}-end`).value;
+        const breakTime = document.getElementById(`${day}-break`).value;
+        const hours = document.getElementById(`${day}-hours`).innerText;
+        rows.push([day, start, end, breakTime, hours]);
+      });
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.aoa_to_sheet(rows);
+      XLSX.utils.book_append_sheet(wb, ws, "Fortnightly Hours");
+      XLSX.writeFile(wb, "Fortnightly_Pay.xlsx");
+    }
+
+    function resetData() {
+      if (confirm("Are you sure you want to reset all data?")) {
+        days.forEach(day => {
+          document.getElementById(`${day}-start`).value = '';
+          document.getElementById(`${day}-end`).value = '';
+          document.getElementById(`${day}-break`).value = 0;
+          document.getElementById(`${day}-hours`).innerText = '0';
+          const img = document.getElementById(`${day}-img`);
+          img.src = '';
+          img.style.display = 'none';
+        });
+        document.getElementById('profileImg').style.display = 'none';
+        document.getElementById('profilePic').value = '';
+        document.getElementById('result').innerHTML = '';
+      }
+    }
+  </script>
+</body>
+</html>
